@@ -94,4 +94,15 @@ if [ -z "$OUT_FOUND" ]; then
 fi
 
 cp "$OUT_FOUND" "$PROJ/$OUT"
+
+# Post-link patch: LSI-C86's cdos.obj startup runs FNINIT/FNSTSW to detect
+# an 8087. On an emulator that doesn't implement x87 opcodes (e.g. HIDOS VM
+# using libx86emu), FNINIT hangs. Replace it with a JMP that skips straight
+# to the "no 8087" branch. Harmless on real hardware and DOSBox.
+if [ -f "$PROJ/build/patch_nofpu.py" ]; then
+    python3 "$PROJ/build/patch_nofpu.py" "$PROJ/$OUT" "$PROJ/$OUT.tmp" 2>/dev/null \
+        && mv "$PROJ/$OUT.tmp" "$PROJ/$OUT" \
+        && echo "built: $PROJ/$OUT (FPU detection patched out)" \
+        && exit 0
+fi
 echo "built: $PROJ/$OUT"

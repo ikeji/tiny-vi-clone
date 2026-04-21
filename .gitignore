@@ -1,6 +1,7 @@
 # Build artifacts
 work/
 *.exe
+*.com
 vi-host
 
 # Editor swap files

@@ -23,7 +23,12 @@
 - **コンパイラ**: LSI C-86 Ver 3.30c 試食版 (`~/tmp/lsic`)
   - Sモデル (small) のみ: コード ≤ 64KB, データ ≤ 64KB
   - `knjlib` (SJIS処理), `doslib` (DOS API) リンク
-- **ランタイム**: MS-DOS 2.11 以上、ANSI.SYS ロード済
+- **ランタイム**: MS-DOS 2.0/2.11 以上、ANSI.SYS ロード済 (または端末自体が ANSI 解釈)
+  - HIDOS VM のような **x87 命令をエミュレートしない** 環境で動かすため、
+    ビルド時に `cdos.obj` の FPU 検出コード (`FNINIT` + `FNSTSW`) を
+    `JMP` でスキップするポストビルドパッチを自動適用
+    (`build/patch_nofpu.py`)。
+    実機 PC / DOSBox では無害、libx86emu のような FPU 未対応環境でハングを回避。
 - **文字コード**: SJIS (画面・ファイル・ソース)
 - **画面**: 既定 80×25 テキストモード。起動時に環境変数で上書き可:
   - `VI_COLS` / `VI_ROWS` が最優先

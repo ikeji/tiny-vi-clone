@@ -1,0 +1,8 @@
+# LSI C-86 configuration using tinymain.obj startup instead of cdos.obj.
+# For diagnosing issues on old/custom MS-DOS 2.0 where cdos.obj hangs.
+
+-DLSI_C
+-XC:\BIN -LC:\LIB\S -IC:\INCLUDE -T -O
+-acdos.obj -atinymain.obj $LSICOPTS
+&		#Command line argument will be inserted here
+-lknjlib -ldoslib -v
