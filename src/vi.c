@@ -117,6 +117,32 @@ static char msg[MSG_MAX];
 static char cmdline[CMD_MAX];
 static int  cmdline_len;
 
+/* ----- redraw dirty tracking -----
+ * To avoid a slow full redraw on every keystroke (seconds per key on real
+ * 8086 hardware), track what actually changed. Edit primitives set these
+ * flags; draw_all() decides what subset of the screen to rewrite.
+ *
+ *  dirty_from  -- smallest buffer line number that needs redrawing; -1 = none
+ *  dirty_all   -- if nonzero, redraw dirty_from..bottom of viewport (lines
+ *                 shifted, e.g. after inserting/deleting a '\n')
+ *  need_full   -- force a complete viewport + clear (initial frame, explicit)
+ *  last_top    -- top_line value at the previous draw; used to detect scroll
+ */
+static int  dirty_from = -1;
+static int  dirty_all  = 0;
+static int  need_full  = 1;
+static int  last_top   = -1;
+
+static void mark_line_dirty(int ln)
+{
+    if (dirty_from < 0 || ln < dirty_from) dirty_from = ln;
+}
+static void mark_below_dirty(int ln)
+{
+    mark_line_dirty(ln);
+    dirty_all = 1;
+}
+
 /* ----- forward ----- */
 static void reindex(void);
 static int  line_of(int off);
@@ -358,28 +384,40 @@ static int clamp_offset(int off)
 /* Insert a byte at off. Returns new cursor position (off+1). */
 static int buf_insert_byte(int off, char c)
 {
+    int ln;
     if (buf_len >= BUF_MAX) return off;
     if (off < 0) off = 0;
     if (off > buf_len) off = buf_len;
+    ln = line_of(off);
     memmove(&buf[off + 1], &buf[off], buf_len - off);
     buf[off] = c;
     buf_len++;
     dirty = 1;
     reindex();
+    /* '\n' shifts every line below down by one row → redraw from here */
+    if (c == '\n') mark_below_dirty(ln);
+    else           mark_line_dirty(ln);
     return off + 1;
 }
 
 /* Delete n bytes starting at off. Returns off (unchanged). */
 static int buf_delete_bytes(int off, int n)
 {
+    int ln, had_nl, i;
     if (off < 0) off = 0;
     if (off >= buf_len) return off;
     if (off + n > buf_len) n = buf_len - off;
     if (n <= 0) return off;
+    ln = line_of(off);
+    /* Any '\n' in the deleted span shifts subsequent lines up. */
+    had_nl = 0;
+    for (i = 0; i < n; i++) if (buf[off + i] == '\n') { had_nl = 1; break; }
     memmove(&buf[off], &buf[off + n], buf_len - off - n);
     buf_len -= n;
     dirty = 1;
     reindex();
+    if (had_nl) mark_below_dirty(ln);
+    else        mark_line_dirty(ln);
     return off;
 }
 
@@ -871,13 +909,40 @@ static void ensure_visible(void)
     if (ln >= top_line + TEXT_H) top_line = ln - TEXT_H + 1;
 }
 
+/* Redraw only what the edit primitives marked dirty. Falls back to a
+ * full viewport rewrite when:
+ *   - this is the first frame (need_full)
+ *   - the viewport scrolled since the last draw (top_line changed)
+ *   - an edit set dirty_all (line-count changed, lines shifted)
+ * The status line is cheap enough that we always rewrite it; the
+ * expensive part is the TEXT_H text rows. */
 static void draw_all(void)
 {
-    int i;
-    tclear();
-    for (i = 0; i < TEXT_H; i++) draw_line(i + 1, top_line + i);
+    int first, last, i;
+
+    if (need_full || top_line != last_top) {
+        /* Full viewport redraw. Use tclear() only on the very first frame
+         * so we don't repaint blank space unnecessarily. */
+        if (need_full) tclear();
+        for (i = 0; i < TEXT_H; i++) draw_line(i + 1, top_line + i);
+    } else if (dirty_from >= 0) {
+        first = dirty_from;
+        if (first < top_line) first = top_line;
+        last = dirty_all ? (top_line + TEXT_H - 1) : first;
+        if (last >= top_line + TEXT_H) last = top_line + TEXT_H - 1;
+        for (i = first; i <= last; i++) {
+            draw_line(i - top_line + 1, i);
+        }
+    }
+
+    /* Status (2 lines) -- cheap, always rewrite. */
     redraw_status();
     redraw_cursor();
+
+    dirty_from = -1;
+    dirty_all  = 0;
+    need_full  = 0;
+    last_top   = top_line;
 }
 
 #endif /* !TEST_MAIN (screen drawing) */
@@ -1076,7 +1141,8 @@ int main(int argc, char **argv)
     top_line = 0;
     msg[0] = '\0';
 
-    tclear();
+    /* draw_all() clears on the first frame via need_full=1, so no
+     * redundant tclear() here. */
     ensure_visible();
     draw_all();
 
