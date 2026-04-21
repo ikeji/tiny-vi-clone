@@ -1,0 +1,8 @@
+# LSI C-86 configuration for DOSBox build
+# LSI C-86 is mounted at C:, work dir is mounted at D:
+
+-DLSI_C
+-XC:\BIN -LC:\LIB\S -IC:\INCLUDE -T -O
+-acdos.obj $LSICOPTS
+&		#Command line argument will be inserted here
+-lknjlib -ldoslib -v

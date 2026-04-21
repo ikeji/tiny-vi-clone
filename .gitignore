@@ -1,0 +1,14 @@
+# Build artifacts
+work/
+*.exe
+vi-host
+
+# Editor swap files
+*.swp
+*.swo
+
+# Claude Code metadata
+.claude/
+
+# Scratch
+hoge.txt
