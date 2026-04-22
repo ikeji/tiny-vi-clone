@@ -873,7 +873,6 @@ static void draw_line(int screen_row, int ln)
 #ifdef VI_QUIET_STATUS
 static char last_msg_row[SCREEN_W_MAX + 1] = "";
 static char last_sta_row[SCREEN_W_MAX + 1] = "";
-static int  last_cur_row = -1, last_cur_col = -1;
 #endif
 
 static void redraw_status(void)
@@ -930,8 +929,6 @@ static void redraw_status(void)
     if (need_full) {
         last_msg_row[0] = (char)0xff;
         last_sta_row[0] = (char)0xff;
-        last_cur_row = -1;
-        last_cur_col = -1;
     }
     if (strcmp(msgrow, last_msg_row) != 0) {
         tgoto(SCREEN_H - 1, 1);
@@ -969,15 +966,10 @@ static void redraw_cursor(void)
     } else {
         col = co + 1;
     }
-#ifdef VI_QUIET_STATUS
-    if (row != last_cur_row || col != last_cur_col) {
-        tgoto(row, col);
-        last_cur_row = row;
-        last_cur_col = col;
-    }
-#else
+    /* Always emit: prior draw steps (status rewrite, text row redraw) may
+     * have moved the terminal cursor, so a cache-hit skip would leave it
+     * stranded off the edit position. 8 bytes/key is cheap insurance. */
     tgoto(row, col);
-#endif
 }
 
 static void ensure_visible(void)
