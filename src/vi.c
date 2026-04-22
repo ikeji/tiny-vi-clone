@@ -677,18 +677,34 @@ typedef struct {
 
 /* Try to match the current tut_buf. Returns the matching code, or 0 if
  * no exact match. *is_prefix is set nonzero if at least one entry has
- * tut_buf as a proper prefix (so we should wait for more input). */
+ * tut_buf as a proper prefix (so we should wait for more input).
+ *
+ * tut_table is generated in sorted order (see build/gen_tut_table.py),
+ * so we can binary-search instead of scanning all ~2600 entries — the
+ * difference is ~1s vs a few ms per keystroke on an 8086. */
 static unsigned short tut_lookup(int *is_prefix)
 {
-    const tut_entry *e;
+    int lo, hi, mid, cmp;
+    const char *s;
+
     *is_prefix = 0;
     if (tut_len == 0) return 0;
-    for (e = tut_table; e->seq; e++) {
-        if (strncmp(e->seq, tut_buf, tut_len) == 0) {
-            if (e->seq[tut_len] == '\0') return e->code;
-            *is_prefix = 1;
-        }
+
+    lo = 0;
+    hi = (int)(sizeof(tut_table) / sizeof(tut_table[0])) - 1;  /* -1 for sentinel */
+    while (lo < hi) {
+        mid = (lo + hi) >> 1;
+        cmp = strcmp(tut_table[mid].seq, tut_buf);
+        if (cmp < 0) lo = mid + 1;
+        else         hi = mid;
     }
+    /* lo is lower_bound: first index whose seq >= tut_buf. Any entry that
+     * has tut_buf as a prefix must sit at exactly this position. */
+    if (lo >= (int)(sizeof(tut_table) / sizeof(tut_table[0])) - 1) return 0;
+    s = tut_table[lo].seq;
+    if (strncmp(s, tut_buf, tut_len) != 0) return 0;
+    if (s[tut_len] == '\0') return tut_table[lo].code;
+    *is_prefix = 1;
     return 0;
 }
 
@@ -848,44 +864,95 @@ static void draw_line(int screen_row, int ln)
     }
 }
 
+/* VI_QUIET_STATUS (compile-time): drop cursor position and the TUT stroke
+ * buffer from the status line so the status line is static across most
+ * keystrokes, then cache the rendered rows and skip the tgoto/putch IO when
+ * nothing user-visible changed. On an 8086 with a slow CON driver this is
+ * the dominant IO cost per keystroke -- especially in TUT mode where
+ * every stroke would otherwise rewrite `-- TUT [xy] --`. */
+#ifdef VI_QUIET_STATUS
+static char last_msg_row[SCREEN_W_MAX + 1] = "";
+static char last_sta_row[SCREEN_W_MAX + 1] = "";
+static int  last_cur_row = -1, last_cur_col = -1;
+#endif
+
 static void redraw_status(void)
 {
+    char line[SCREEN_W_MAX + 1];
+    char msgrow[SCREEN_W_MAX + 1];
+    int n, k;
+#ifndef VI_QUIET_STATUS
     int ln = line_of(cur_off);
     int co = col_of(cur_off);
-    char line[SCREEN_W_MAX + 1];
-    int n;
+#endif
 
-    tgoto(SCREEN_H - 1, 1);
-    tclr_eol();
+    k = 0;
     if (mode == MODE_CMDLINE) {
-        putch(':');
-        for (n = 0; n < cmdline_len && n < SCREEN_W - 1; n++)
-            putch(cmdline[n]);
+        if (k < SCREEN_W) msgrow[k++] = ':';
+        for (n = 0; n < cmdline_len && k < SCREEN_W; n++)
+            msgrow[k++] = cmdline[n];
     } else if (msg[0]) {
-        for (n = 0; msg[n] && n < SCREEN_W; n++) putch(msg[n]);
+        for (n = 0; msg[n] && k < SCREEN_W; n++)
+            msgrow[k++] = msg[n];
     }
+    msgrow[k] = '\0';
 
-    tgoto(SCREEN_H, 1);
-    tclr_eol();
     {
         const char *mode_str = "";
+#ifndef VI_QUIET_STATUS
         char tut_disp[24];
+#endif
         if (mode == MODE_INSERT) mode_str = "-- INSERT --";
         else if (mode == MODE_TUT) {
+#ifdef VI_QUIET_STATUS
+            mode_str = "-- TUT --";
+#else
             sprintf(tut_disp, "-- TUT [%s] --", tut_buf);
             mode_str = tut_disp;
+#endif
         }
-        n = sprintf(line, "%s%s %d,%d %s",
-                    filename[0] ? filename : "[no name]",
-                    dirty ? " [+]" : "",
-                    ln + 1, co + 1,
-                    mode_str);
+#ifdef VI_QUIET_STATUS
+        sprintf(line, "%s%s %s",
+                filename[0] ? filename : "[no name]",
+                dirty ? " [+]" : "",
+                mode_str);
+#else
+        sprintf(line, "%s%s %d,%d %s",
+                filename[0] ? filename : "[no name]",
+                dirty ? " [+]" : "",
+                ln + 1, co + 1,
+                mode_str);
+#endif
     }
-    (void)n;
-    {
-        int k;
-        for (k = 0; line[k] && k < SCREEN_W; k++) putch(line[k]);
+
+#ifdef VI_QUIET_STATUS
+    /* tclear() during a full redraw wiped both rows; force the cache to miss. */
+    if (need_full) {
+        last_msg_row[0] = (char)0xff;
+        last_sta_row[0] = (char)0xff;
+        last_cur_row = -1;
+        last_cur_col = -1;
     }
+    if (strcmp(msgrow, last_msg_row) != 0) {
+        tgoto(SCREEN_H - 1, 1);
+        tclr_eol();
+        for (n = 0; msgrow[n]; n++) putch(msgrow[n]);
+        strcpy(last_msg_row, msgrow);
+    }
+    if (strcmp(line, last_sta_row) != 0) {
+        tgoto(SCREEN_H, 1);
+        tclr_eol();
+        for (n = 0; line[n] && n < SCREEN_W; n++) putch(line[n]);
+        strcpy(last_sta_row, line);
+    }
+#else
+    tgoto(SCREEN_H - 1, 1);
+    tclr_eol();
+    for (n = 0; msgrow[n]; n++) putch(msgrow[n]);
+    tgoto(SCREEN_H, 1);
+    tclr_eol();
+    for (n = 0; line[n] && n < SCREEN_W; n++) putch(line[n]);
+#endif
 }
 
 static void redraw_cursor(void)
@@ -893,13 +960,24 @@ static void redraw_cursor(void)
     int ln = line_of(cur_off);
     int co = col_of(cur_off);
     int row = ln - top_line + 1;
+    int col;
     if (row < 1) row = 1;
     if (row > TEXT_H) row = TEXT_H;
     if (mode == MODE_CMDLINE) {
-        tgoto(SCREEN_H - 1, cmdline_len + 2);
+        row = SCREEN_H - 1;
+        col = cmdline_len + 2;
     } else {
-        tgoto(row, co + 1);
+        col = co + 1;
     }
+#ifdef VI_QUIET_STATUS
+    if (row != last_cur_row || col != last_cur_col) {
+        tgoto(row, col);
+        last_cur_row = row;
+        last_cur_col = col;
+    }
+#else
+    tgoto(row, col);
+#endif
 }
 
 static void ensure_visible(void)

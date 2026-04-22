@@ -32,13 +32,16 @@ cp "$PROJ/build/_lcc" "$WORK/_lcc"
 SRC_DOS="$(basename "$SRC")"
 OUT_DOS="$(basename "$OUT" .exe).exe"
 
+# Optional extra compiler options (e.g. -DVI_QUIET_STATUS) via env var.
+EXTRA_OPTS="${VI_DEFINES:-}"
+
 cat > "$WORK/__build.bat" <<EOF
 @echo off
 set LSIC86=C:\\
 set PATH=C:\\BIN
 set TMP=D:\\
 set TEMP=D:\\
-set LSICOPTS=
+set LSICOPTS=$EXTRA_OPTS
 d:
 lcc -o $OUT_DOS $SRC_DOS > __cc.log
 if errorlevel 1 echo BUILD_FAILED > __status.txt

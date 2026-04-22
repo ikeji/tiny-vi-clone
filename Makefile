@@ -1,4 +1,4 @@
-.PHONY: all vi host hello test clean table
+.PHONY: all vi vi-quiet host hello test clean table
 
 all: vi host
 
@@ -11,6 +11,12 @@ table:
 
 vi: src/vi.c src/tuttable.h
 	./build/build.sh src/vi.c vi.exe
+
+# "Quiet" build: no cursor position or TUT stroke buffer in the status
+# line. The status line becomes cacheable so most keystrokes skip the
+# status redraw entirely -- useful on very slow real hardware.
+vi-quiet: src/vi.c src/tuttable.h
+	VI_DEFINES=-DVI_QUIET_STATUS ./build/build.sh src/vi.c vi.exe
 
 hello: src/hello.c
 	./build/build.sh src/hello.c hello.exe
