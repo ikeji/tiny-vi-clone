@@ -3,6 +3,9 @@ work/
 *.exe
 *.com
 vi-host
+# Tracked release binaries (so a rebuild shows up as a modification)
+!vi.exe
+!vi-quiet.exe
 
 # Editor swap files
 *.swp
