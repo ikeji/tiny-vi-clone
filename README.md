@@ -36,7 +36,7 @@ make clean       # 生成物削除
 vi filename.txt
 ```
 
-ANSI.SYS をロードしておくこと。画面サイズは既定 40×30。`VI_COLS` /
+ANSI.SYS をロードしておくこと。画面サイズは既定 80×25。`VI_COLS` /
 `VI_ROWS` (または POSIX の `COLUMNS` / `LINES`) で上書き可。
 
 ### Linux ホスト (動作確認用)
