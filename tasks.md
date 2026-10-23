@@ -16,13 +16,13 @@
 ## ビルドと実行
 ```
 make             # vi.exe (DOS) + vi-host (Linux) をビルド
-make test        # 単体テスト(95件)を実行
+make test        # 単体テスト(186件)を実行
 ./test/manual.sh # DOSBox を開いて対話的に動作確認
 ./run-host.sh FILE  # SSH越しにLinuxで直接試せる (luit経由でSJIS↔UTF-8)
 ```
 
 ## サポートされているキー
-ノーマル: `h j k l` 矢印 `0 $ G gg x dd i a A I o O : ZZ`
+ノーマル: `h j k l` 矢印 `0 $ G gg x dd yy p P u i a A I o O : ZZ`
 挿入: 印字可能文字 / `BS` / `CR` / `ESC` / `Ctrl+J`(→TUTモード)
 ex: `:w [name]` `:q` `:q!` `:wq`
 TUTモード(日本語入力): `rk→あ ek→か elk→が tltk→ぱ dlu→っ rz→熱 ,,→個` など2611エントリ(ひらがな/カタカナ/漢字)。

@@ -46,6 +46,7 @@
 #define CMD_MAX   64
 #define MSG_MAX   80
 #define VI_FNAME_MAX 64
+#define YANK_MAX  4096            /* bytes the yank register can hold */
 
 /* Screen geometry, resolved at startup from LINES/COLUMNS env vars
  * (or the defaults). TEXT_H is rows - 2 (status + cmdline). */
@@ -109,6 +110,23 @@ static int  tut_len;
 
 /* pending operator (e.g. 'd' waiting for second char) */
 static int pending_op;
+
+/* yank register: filled by yy / dd / x, emptied into the buffer by p / P.
+ * yank_linewise distinguishes a whole line (stored WITHOUT its '\n') from
+ * a run of bytes inside a line. */
+static char yank_buf[YANK_MAX];
+static int  yank_len;
+static int  yank_linewise;
+
+/* single-level undo: a snapshot of the whole buffer taken just before the
+ * last modifying command (x, dd, p, P, or an insert session). 'u' swaps
+ * the snapshot with the live buffer, so a second 'u' redoes. Copying
+ * buf_len bytes per command is a few ms on an 8086 and keeps the logic
+ * trivially correct compared with a delta log. */
+static char undo_buf[BUF_MAX];
+static int  undo_len;
+static int  undo_cur;             /* cursor to restore with the snapshot */
+static int  undo_valid;
 
 /* status message to show on next redraw */
 static char msg[MSG_MAX];
@@ -421,7 +439,130 @@ static int buf_delete_bytes(int off, int n)
     return off;
 }
 
-/* Delete the current char (1 or 2 bytes for SJIS). */
+/* Insert n bytes (from outside buf) at off. Returns off + n, or off
+ * unchanged if the text does not fit. */
+static int buf_insert_bytes(int off, const char *src, int n)
+{
+    int ln, i, had_nl;
+    if (n <= 0) return off;
+    if (buf_len + n > BUF_MAX) return off;
+    if (off < 0) off = 0;
+    if (off > buf_len) off = buf_len;
+    ln = line_of(off);
+    memmove(&buf[off + n], &buf[off], buf_len - off);
+    memcpy(&buf[off], src, n);
+    buf_len += n;
+    dirty = 1;
+    reindex();
+    had_nl = 0;
+    for (i = 0; i < n; i++) if (src[i] == '\n') { had_nl = 1; break; }
+    if (had_nl) mark_below_dirty(ln);
+    else        mark_line_dirty(ln);
+    return off + n;
+}
+
+/* ----- yank register ----- */
+
+static void yank_store(const char *src, int n, int linewise)
+{
+    if (n > YANK_MAX) {
+        yank_len = 0;
+        strcpy(msg, "too long to yank");
+        return;
+    }
+    memcpy(yank_buf, src, n);
+    yank_len = n;
+    yank_linewise = linewise;
+}
+
+/* yy: copy the current line (without its '\n') into the register. */
+static void do_yank_line(void)
+{
+    int ln = line_of(cur_off);
+    yank_store(&buf[line_start(ln)], line_byte_len(ln), 1);
+}
+
+/* p (after=1) / P (after=0): insert the register contents.
+ * Linewise text goes on a new line below/above the cursor line and the
+ * cursor lands on its first byte. Charwise text goes after/at the cursor
+ * and the cursor lands on its last character, like vi. */
+static void do_put(int after)
+{
+    int ln, at, need;
+    if (yank_len <= 0) return;
+    need = yank_len + (yank_linewise ? 1 : 0);
+    if (buf_len + need > BUF_MAX) {
+        strcpy(msg, "buffer full");
+        return;
+    }
+    ln = line_of(cur_off);
+    if (yank_linewise) {
+        if (after && ln + 1 >= line_count) {
+            /* below the last line (which has no '\n'): append "\n" + text */
+            at = buf_len;
+            buf_insert_byte(at, '\n');
+            at++;
+            buf_insert_bytes(at, yank_buf, yank_len);
+        } else {
+            at = after ? line_ofs[ln + 1] : line_start(ln);
+            buf_insert_bytes(at, yank_buf, yank_len);
+            buf_insert_byte(at + yank_len, '\n');
+        }
+        cur_off = at;
+    } else {
+        at = cur_off;
+        if (after && at < line_end(ln)) at = next_byte(at);
+        buf_insert_bytes(at, yank_buf, yank_len);
+        cur_off = prev_byte(at + yank_len);
+        if (cur_off < at) cur_off = at;
+    }
+    desired_col = -1;
+    cur_off = clamp_offset(cur_off);
+}
+
+/* ----- undo ----- */
+
+/* Snapshot the buffer; call right before a modifying command. */
+static void undo_save(void)
+{
+    memcpy(undo_buf, buf, buf_len);
+    undo_len = buf_len;
+    undo_cur = cur_off;
+    undo_valid = 1;
+}
+
+/* u: swap the live buffer with the snapshot. Only the tail from the first
+ * differing byte is exchanged, and the redraw starts at that line. */
+static void do_undo(void)
+{
+    int i, n, hi, t;
+    char c;
+    if (!undo_valid) {
+        strcpy(msg, "nothing to undo");
+        return;
+    }
+    n = buf_len < undo_len ? buf_len : undo_len;
+    for (i = 0; i < n && buf[i] == undo_buf[i]; i++)
+        ;
+    if (i == n && buf_len == undo_len) {
+        strcpy(msg, "nothing to undo");
+        return;
+    }
+    hi = buf_len > undo_len ? buf_len : undo_len;
+    for (t = i; t < hi; t++) {
+        c = buf[t]; buf[t] = undo_buf[t]; undo_buf[t] = c;
+    }
+    t = buf_len; buf_len = undo_len; undo_len = t;
+    t = cur_off; cur_off = undo_cur; undo_cur = t;
+    dirty = 1;
+    reindex();
+    mark_below_dirty(line_of(i));
+    desired_col = -1;
+    cur_off = clamp_offset(cur_off);
+}
+
+/* Delete the current char (1 or 2 bytes for SJIS); it goes to the
+ * yank register (charwise), like vi's x. */
 static void do_delete_char(void)
 {
     int n = 1;
@@ -429,6 +570,7 @@ static void do_delete_char(void)
     if (cur_off >= buf_len) return;
     if (buf[cur_off] == '\n') return; /* 'x' on empty line: no-op */
     if (byte_is_lead(cur_off) && cur_off + 1 < buf_len) n = 2;
+    yank_store(&buf[cur_off], n, 0);
     cur_off = buf_delete_bytes(cur_off, n);
     ln = line_of(cur_off);
     le = line_end(ln);
@@ -436,12 +578,13 @@ static void do_delete_char(void)
     cur_off = clamp_offset(cur_off);
 }
 
-/* Delete an entire line. */
+/* Delete an entire line; its text goes to the yank register (linewise). */
 static void do_delete_line(void)
 {
     int ln = line_of(cur_off);
     int ls = line_start(ln);
     int n;
+    yank_store(&buf[ls], line_byte_len(ln), 1);
     if (ln + 1 < line_count) {
         n = line_ofs[ln + 1] - ls;  /* includes the trailing '\n' */
     } else if (line_count > 1) {
@@ -1027,7 +1170,12 @@ static int normal_key(int k)
     msg[0] = '\0';
     if (pending_op == 'd') {
         pending_op = 0;
-        if (k == 'd') { do_delete_line(); return 0; }
+        if (k == 'd') { undo_save(); do_delete_line(); return 0; }
+        return 0;
+    }
+    if (pending_op == 'y') {
+        pending_op = 0;
+        if (k == 'y') do_yank_line();
         return 0;
     }
     if (pending_op == 'g') {
@@ -1061,24 +1209,33 @@ static int normal_key(int k)
     case 'G':                 move_bottom(); break;
     case 'g':                 pending_op = 'g'; break;
     case 'Z':                 pending_op = 'Z'; break;
-    case 'x':                 do_delete_char(); break;
+    case 'x':                 undo_save(); do_delete_char(); break;
     case 'd':                 pending_op = 'd'; break;
-    case 'i':                 mode = MODE_INSERT; break;
+    case 'y':                 pending_op = 'y'; break;
+    case 'p':                 undo_save(); do_put(1); break;
+    case 'P':                 undo_save(); do_put(0); break;
+    case 'u':                 do_undo(); break;
+    case 'i':                 undo_save(); mode = MODE_INSERT; break;
     case 'a':
+        undo_save();
         if (cur_off < line_end(line_of(cur_off))) cur_off = next_byte(cur_off);
         mode = MODE_INSERT; break;
     case 'A':
+        undo_save();
         move_end();
         if (cur_off < line_end(line_of(cur_off))) cur_off = next_byte(cur_off);
         mode = MODE_INSERT; break;
     case 'I':
+        undo_save();
         move_home(); mode = MODE_INSERT; break;
     case 'o':
+        undo_save();
         move_end();
         if (cur_off < line_end(line_of(cur_off))) cur_off = next_byte(cur_off);
         do_insert_newline();
         mode = MODE_INSERT; break;
     case 'O':
+        undo_save();
         move_home();
         buf_insert_byte(cur_off, '\n');
         /* cur_off is now after the \n; but for 'O' we want to be on the new

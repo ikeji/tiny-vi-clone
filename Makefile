@@ -25,6 +25,7 @@ vitest.exe: src/vitest.c src/vi.c
 	./build/build.sh src/vitest.c vitest.exe
 
 test: vitest.exe
+	@mkdir -p work/run
 	@./test/run.sh vitest.exe | tr -d '\r' | tee work/run/test-output.txt
 	@grep -q '^SUMMARY pass=.* fail=0$$' work/run/test-output.txt || (echo "TESTS FAILED" && exit 1)
 	@echo "All tests passed."

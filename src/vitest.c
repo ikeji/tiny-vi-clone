@@ -31,6 +31,9 @@ static void reset_state(void)
     dirty = 0;
     msg[0] = '\0';
     cmdline_len = 0;
+    yank_len = 0;
+    yank_linewise = 0;
+    undo_valid = 0;
     reindex();
 }
 
@@ -558,6 +561,271 @@ static void test_ctrl_j_enters_tut(void)
     check_eq_int("cr_is_lf", buf[0], '\n');
 }
 
+/* ---------- yank / put ---------- */
+
+static void test_yank_put_line(void)
+{
+    reset_state();
+    load_text("one\ntwo\nthree");
+    cur_off = line_start(1);          /* on "two" */
+    normal_key('y'); normal_key('y');
+    check_eq_int("yy_len", yank_len, 3);
+    check_eq_int("yy_linewise", yank_linewise, 1);
+    check_eq_str("yy_no_change", "one\ntwo\nthree");
+    normal_key('p');                  /* below "two" */
+    check_eq_str("yy_p_below", "one\ntwo\ntwo\nthree");
+    check_eq_int("yy_p_cursor", cur_off, line_start(2));
+    normal_key('P');                  /* above the new line */
+    check_eq_str("yy_P_above", "one\ntwo\ntwo\ntwo\nthree");
+    check_eq_int("yy_P_cursor", cur_off, line_start(2));
+}
+
+static void test_put_line_at_end(void)
+{
+    /* p on the last line (no trailing '\n') appends "\n" + text */
+    reset_state();
+    load_text("a\nb");
+    cur_off = 0;
+    normal_key('y'); normal_key('y');
+    move_bottom();
+    normal_key('p');
+    check_eq_str("p_last_line", "a\nb\na");
+    check_eq_int("p_last_line_cursor", cur_off, 4);
+
+    /* p on the (empty) line after a trailing '\n' */
+    reset_state();
+    load_text("a\nb\n");
+    cur_off = 0;
+    normal_key('y'); normal_key('y');
+    move_bottom();
+    normal_key('p');
+    check_eq_str("p_after_trailing_nl", "a\nb\n\na");
+}
+
+static void test_dd_then_put(void)
+{
+    reset_state();
+    load_text("one\ntwo\nthree");
+    cur_off = line_start(0);
+    normal_key('d'); normal_key('d');
+    check_eq_str("dd_removed", "two\nthree");
+    check_eq_int("dd_yank_len", yank_len, 3);
+    check_eq_int("dd_yank_linewise", yank_linewise, 1);
+    move_bottom();
+    normal_key('p');
+    check_eq_str("dd_p_moves_line", "two\nthree\none");
+
+    /* deleting the last line keeps its text without the leading '\n' */
+    reset_state();
+    load_text("a\nbb");
+    move_bottom();
+    normal_key('d'); normal_key('d');
+    check_eq_str("dd_last_removed", "a");
+    check_eq_int("dd_last_yank_len", yank_len, 2);
+    check_eq_int("dd_last_yank_b0", yank_buf[0], 'b');
+    normal_key('P');
+    check_eq_str("dd_last_P", "bb\na");
+}
+
+static void test_x_then_put(void)
+{
+    reset_state();
+    load_text("abc\n");
+    cur_off = 0;
+    normal_key('x');                  /* delete 'a' */
+    check_eq_str("x_removed", "bc\n");
+    check_eq_int("x_yank_charwise", yank_linewise, 0);
+    check_eq_int("x_yank_len", yank_len, 1);
+    normal_key('p');                  /* after 'b' */
+    check_eq_str("x_p_after", "bac\n");
+    check_eq_int("x_p_cursor", cur_off, 1);
+    move_end();
+    normal_key('P');                  /* at cursor ('c') */
+    check_eq_str("x_P_before", "baac\n");
+    check_eq_int("x_P_cursor", cur_off, 2);
+}
+
+static void test_x_put_sjis(void)
+{
+    /* "‚ ‚¢" = 82 A0 82 A2; x yanks 2 bytes, p puts them whole */
+    reset_state();
+    do_insert_byte((char)0x82); do_insert_byte((char)0xa0);
+    do_insert_byte((char)0x82); do_insert_byte((char)0xa2);
+    mode = MODE_NORMAL;
+    cur_off = 0;
+    normal_key('x');
+    check_eq_int("x_sjis_yank_len", yank_len, 2);
+    check_eq_int("x_sjis_buf_len", buf_len, 2);
+    normal_key('p');                  /* after ‚¢ -> ‚¢‚  */
+    check_eq_int("p_sjis_len", buf_len, 4);
+    check_eq_int("p_sjis_b2", (unsigned char)buf[2], 0x82);
+    check_eq_int("p_sjis_b3", (unsigned char)buf[3], 0xa0);
+    check_eq_int("p_sjis_cursor", cur_off, 2);  /* on the pasted char */
+}
+
+static void test_put_empty_register(void)
+{
+    reset_state();
+    load_text("abc");
+    normal_key('p');
+    check_eq_str("p_empty_noop", "abc");
+}
+
+static void test_put_buffer_full(void)
+{
+    int i;
+    reset_state();
+    for (i = 0; i < BUF_MAX - 2; i++) buf[i] = 'a';
+    buf_len = BUF_MAX - 2;
+    reindex();
+    cur_off = 0;
+    normal_key('y'); normal_key('y');  /* too long to yank */
+    check_eq_int("yy_too_long", yank_len, 0);
+    normal_key('x');                   /* 1 byte register */
+    normal_key('p');
+    check_eq_int("p_fits", buf_len, BUF_MAX - 2);
+    normal_key('p');
+    check_eq_int("p_fits_2", buf_len, BUF_MAX - 1);
+    normal_key('p');
+    check_eq_int("p_fits_3", buf_len, BUF_MAX);
+    normal_key('p');                   /* no room */
+    check_eq_int("p_full_rejected", buf_len, BUF_MAX);
+}
+
+/* ---------- undo ---------- */
+
+static void test_undo_nothing(void)
+{
+    reset_state();
+    load_text("abc");
+    normal_key('u');
+    check_eq_str("u_nothing", "abc");
+    check_eq_int("u_nothing_msg", strcmp(msg, "nothing to undo"), 0);
+}
+
+static void test_undo_x_and_redo(void)
+{
+    reset_state();
+    load_text("abc\ndef");
+    cur_off = 5;                      /* 'e' */
+    normal_key('x');
+    check_eq_str("u_x_deleted", "abc\ndf");
+    normal_key('u');
+    check_eq_str("u_x_restored", "abc\ndef");
+    check_eq_int("u_x_cursor", cur_off, 5);
+    normal_key('u');                  /* redo */
+    check_eq_str("u_x_redo", "abc\ndf");
+    normal_key('u');
+    check_eq_str("u_x_undo_again", "abc\ndef");
+}
+
+static void test_undo_dd(void)
+{
+    reset_state();
+    load_text("one\ntwo\nthree");
+    cur_off = line_start(2);
+    normal_key('d'); normal_key('d');
+    check_eq_str("u_dd_deleted", "one\ntwo");
+    check_eq_int("u_dd_cursor_moved", cur_off, 4);
+    normal_key('u');
+    check_eq_str("u_dd_restored", "one\ntwo\nthree");
+    check_eq_int("u_dd_cursor_back", cur_off, 8);
+}
+
+static void test_undo_put(void)
+{
+    reset_state();
+    load_text("one\ntwo");
+    normal_key('y'); normal_key('y');
+    normal_key('p');
+    check_eq_str("u_p_put", "one\none\ntwo");
+    normal_key('u');
+    check_eq_str("u_p_undone", "one\ntwo");
+    check_eq_int("u_p_cursor", cur_off, 0);
+}
+
+static void test_undo_insert_session(void)
+{
+    /* The whole i...ESC session is one undo unit. */
+    reset_state();
+    load_text("hello");
+    cur_off = 4;                      /* 'o' */
+    normal_key('A');
+    insert_key(' ');
+    insert_key('w');
+    insert_key(0x0d);
+    insert_key('x');
+    insert_key(0x08);
+    insert_key('y');
+    insert_key(0x1b);
+    check_eq_str("u_ins_result", "hello w\ny");
+    normal_key('u');
+    check_eq_str("u_ins_undone", "hello");
+    check_eq_int("u_ins_cursor", cur_off, 4);
+    normal_key('u');
+    check_eq_str("u_ins_redone", "hello w\ny");
+
+    /* TUT input inside the session is part of the same unit. */
+    reset_state();
+    load_text("ab");
+    cur_off = 0;
+    normal_key('i');
+    insert_key(0x0a);                 /* Ctrl+J -> TUT */
+    tut_key('r'); tut_key('k');       /* ‚  */
+    tut_key(0x1b);
+    insert_key(0x1b);
+    check_eq_int("u_tut_len", buf_len, 4);
+    normal_key('u');
+    check_eq_str("u_tut_undone", "ab");
+}
+
+static void test_undo_o_and_O(void)
+{
+    reset_state();
+    load_text("a\nb");
+    cur_off = 0;
+    normal_key('o');
+    insert_key('z');
+    insert_key(0x1b);
+    check_eq_str("u_o_result", "a\nz\nb");
+    normal_key('u');
+    check_eq_str("u_o_undone", "a\nb");
+
+    move_bottom();
+    normal_key('O');
+    insert_key(0x1b);                 /* empty line only */
+    check_eq_str("u_O_result", "a\n\nb");
+    normal_key('u');
+    check_eq_str("u_O_undone", "a\nb");
+    check_eq_int("u_O_cursor", cur_off, 2);
+}
+
+static void test_undo_noop_change(void)
+{
+    /* i then ESC without typing: 'u' reports nothing to undo */
+    reset_state();
+    load_text("abc");
+    cur_off = 1;
+    normal_key('i');
+    insert_key(0x1b);
+    normal_key('u');
+    check_eq_str("u_noop_unchanged", "abc");
+    check_eq_int("u_noop_msg", strcmp(msg, "nothing to undo"), 0);
+}
+
+static void test_undo_shrinks_to_empty(void)
+{
+    reset_state();
+    load_text("only");
+    normal_key('d'); normal_key('d');
+    check_eq_str("u_empty_deleted", "");
+    normal_key('u');
+    check_eq_str("u_empty_restored", "only");
+    normal_key('u');
+    check_eq_str("u_empty_redo", "");
+    check_eq_int("u_empty_cursor", cur_off, 0);
+}
+
 int main(void)
 {
     test_insert_basic();
@@ -589,6 +857,21 @@ int main(void)
     test_tut_kanji();
     test_screen_size_env();
     test_ctrl_j_enters_tut();
+    test_yank_put_line();
+    test_put_line_at_end();
+    test_dd_then_put();
+    test_x_then_put();
+    test_x_put_sjis();
+    test_put_empty_register();
+    test_put_buffer_full();
+    test_undo_nothing();
+    test_undo_x_and_redo();
+    test_undo_dd();
+    test_undo_put();
+    test_undo_insert_session();
+    test_undo_o_and_O();
+    test_undo_noop_change();
+    test_undo_shrinks_to_empty();
 
     printf("SUMMARY pass=%d fail=%d\n", tests_pass, tests_fail);
     return tests_fail == 0 ? 0 : 1;
