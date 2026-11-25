@@ -34,8 +34,9 @@ def extract(content):
             continue
         if len(val) != 1 or ord(val) < 0x80:
             continue
-        # keys are lowercase ASCII letters or the punctuation ,.;/
-        if not all((c.isalpha() and c.islower()) or c in ",.;/" for c in key):
+        # keys are ASCII letters (lower for hira/kanji, upper for kata),
+        # punctuation ,.;/, or space (2nd stroke for symbols like "t " -> 「).
+        if not all((c.isascii() and c.isalpha()) or c in ",.;/ " for c in key):
             continue
         seen.add(key)
         yield key, val
@@ -62,7 +63,7 @@ def main():
         code = (b0 << 8) | b1
         # Escape non-ASCII kanji for the comment block -- source is SJIS.
         out.append(f'    {{"{k}", 0x{code:04x}}}, /* {v} */')
-    out.append("    {0, 0}")
+    out.append('    {"", 0}')
     out.append("};")
     out.append("")
     text = "\n".join(out)

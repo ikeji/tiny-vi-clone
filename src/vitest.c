@@ -466,7 +466,7 @@ static void test_tut_newline(void)
 
 static void test_tut_space(void)
 {
-    /* Space in TUT mode inserts a space and stays in TUT mode. */
+    /* Standalone Space in TUT mode inserts ASCII space and stays in TUT. */
     reset_state();
     mode = MODE_TUT;
     tut_reset();
@@ -477,16 +477,42 @@ static void test_tut_space(void)
     check_eq_int("tut_sp_mid", buf[2], ' ');
     check_eq_int("tut_sp_still_tut", mode, MODE_TUT);
 
-    /* Space mid-stroke discards the pending stroke and inserts space. */
+    /* Space as 2nd stroke produces TUT symbols: t+SP=8175, y+SP=8176,
+     * d+SP=8141, f+SP=8142. */
     reset_state();
     mode = MODE_TUT;
     tut_reset();
-    tut_key('r');
-    check_eq_int("tut_sp_pending_before", tut_len, 1);
-    tut_key(' ');
-    check_eq_int("tut_sp_pending_cleared", tut_len, 0);
-    check_eq_int("tut_sp_pending_len", buf_len, 1);
-    check_eq_int("tut_sp_pending_byte", buf[0], ' ');
+    tut_key('t'); tut_key(' ');
+    tut_key('y'); tut_key(' ');
+    tut_key('d'); tut_key(' ');
+    tut_key('f'); tut_key(' ');
+    check_eq_int("tut_sym_len", buf_len, 8);
+    check_eq_int("tut_sym_lbr_b0", (unsigned char)buf[0], 0x81);
+    check_eq_int("tut_sym_lbr_b1", (unsigned char)buf[1], 0x75);
+    check_eq_int("tut_sym_rbr_b0", (unsigned char)buf[2], 0x81);
+    check_eq_int("tut_sym_rbr_b1", (unsigned char)buf[3], 0x76);
+    check_eq_int("tut_sym_ten_b1", (unsigned char)buf[5], 0x41);
+    check_eq_int("tut_sym_maru_b1", (unsigned char)buf[7], 0x42);
+
+    /* Uppercase katakana strokes: RK=8341, E+SP=815b. */
+    reset_state();
+    mode = MODE_TUT;
+    tut_reset();
+    tut_key('R'); tut_key('K');
+    tut_key('E'); tut_key(' ');
+    check_eq_int("tut_kata_len", buf_len, 4);
+    check_eq_int("tut_kata_a_b0", (unsigned char)buf[0], 0x83);
+    check_eq_int("tut_kata_a_b1", (unsigned char)buf[1], 0x41);
+    check_eq_int("tut_kata_bar_b0", (unsigned char)buf[2], 0x81);
+    check_eq_int("tut_kata_bar_b1", (unsigned char)buf[3], 0x5b);
+
+    /* Invalid space-terminated sequence (dl + SP) is dropped silently. */
+    reset_state();
+    mode = MODE_TUT;
+    tut_reset();
+    tut_key('d'); tut_key('l'); tut_key(' ');
+    check_eq_int("tut_sp_dead_len", buf_len, 0);
+    check_eq_int("tut_sp_dead_buf", tut_len, 0);
 }
 
 static void test_tut_esc_exits(void)

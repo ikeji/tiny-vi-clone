@@ -810,7 +810,7 @@ static int file_save(const char *name)
  */
 
 typedef struct {
-    const char    *seq;
+    char           seq[5];
     unsigned short code;
 } tut_entry;
 
@@ -891,13 +891,14 @@ static void tut_key(int k)
         do_insert_newline();
         return;
     }
-    if (k == ' ') {                        /* Space: insert space, stay in TUT */
-        tut_reset();
+    if (k == ' ' && tut_len == 0) {        /* standalone Space: insert space */
         do_insert_byte(' ');
         return;
     }
     if (!((k >= 'a' && k <= 'z') ||
-          k == ',' || k == '.' || k == ';' || k == '/')) {
+          (k >= 'A' && k <= 'Z') ||
+          k == ',' || k == '.' || k == ';' || k == '/' ||
+          k == ' ')) {
         /* non-stroke key cancels the sequence but stays in TUT mode */
         tut_reset();
         return;
