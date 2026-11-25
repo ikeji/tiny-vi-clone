@@ -464,6 +464,31 @@ static void test_tut_newline(void)
     check_eq_int("tut_cr_pending_byte", buf[0], '\n');
 }
 
+static void test_tut_space(void)
+{
+    /* Space in TUT mode inserts a space and stays in TUT mode. */
+    reset_state();
+    mode = MODE_TUT;
+    tut_reset();
+    tut_key('r'); tut_key('k');
+    tut_key(' ');
+    tut_key('r'); tut_key('k');
+    check_eq_int("tut_sp_len", buf_len, 5);
+    check_eq_int("tut_sp_mid", buf[2], ' ');
+    check_eq_int("tut_sp_still_tut", mode, MODE_TUT);
+
+    /* Space mid-stroke discards the pending stroke and inserts space. */
+    reset_state();
+    mode = MODE_TUT;
+    tut_reset();
+    tut_key('r');
+    check_eq_int("tut_sp_pending_before", tut_len, 1);
+    tut_key(' ');
+    check_eq_int("tut_sp_pending_cleared", tut_len, 0);
+    check_eq_int("tut_sp_pending_len", buf_len, 1);
+    check_eq_int("tut_sp_pending_byte", buf[0], ' ');
+}
+
 static void test_tut_esc_exits(void)
 {
     reset_state();
@@ -853,6 +878,7 @@ int main(void)
     test_tut_dakuten();
     test_tut_backspace();
     test_tut_newline();
+    test_tut_space();
     test_tut_esc_exits();
     test_tut_kanji();
     test_screen_size_env();

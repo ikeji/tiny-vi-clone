@@ -891,6 +891,11 @@ static void tut_key(int k)
         do_insert_newline();
         return;
     }
+    if (k == ' ') {                        /* Space: insert space, stay in TUT */
+        tut_reset();
+        do_insert_byte(' ');
+        return;
+    }
     if (!((k >= 'a' && k <= 'z') ||
           k == ',' || k == '.' || k == ';' || k == '/')) {
         /* non-stroke key cancels the sequence but stays in TUT mode */
